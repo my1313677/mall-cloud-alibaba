@@ -1,5 +1,6 @@
 package com.mtcarpenter.mall.controller;
 
+import cn.hutool.core.collection.CollUtil;
 import com.mtcarpenter.mall.common.api.CommonPage;
 import com.mtcarpenter.mall.common.api.CommonResult;
 import com.mtcarpenter.mall.dto.UmsAdminLoginParam;
@@ -8,12 +9,15 @@ import com.mtcarpenter.mall.dto.UpdateAdminPasswordParam;
 import com.mtcarpenter.mall.model.UmsAdmin;
 import com.mtcarpenter.mall.model.UmsPermission;
 import com.mtcarpenter.mall.model.UmsRole;
+import com.mtcarpenter.mall.service.UmsAdminCacheService;
 import com.mtcarpenter.mall.service.UmsAdminService;
 import com.mtcarpenter.mall.service.UmsRoleService;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Controller;
 import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +27,7 @@ import java.security.Principal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 后台用户管理
@@ -40,6 +45,9 @@ public class UmsAdminController {
     private UmsAdminService adminService;
     @Autowired
     private UmsRoleService roleService;
+
+    @Autowired
+    private UmsAdminCacheService umsAdminCacheService;
 
     @ApiOperation(value = "用户注册")
     @RequestMapping(value = "/register", method = RequestMethod.POST)
@@ -72,12 +80,15 @@ public class UmsAdminController {
     public CommonResult refreshToken(HttpServletRequest request) {
         String token = request.getHeader(tokenHeader);
         String refreshToken = adminService.refreshToken(token);
+        UserDetails userDetails = (UserDetails) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
         if (refreshToken == null) {
+            umsAdminCacheService.delToken(userDetails.getUsername());
             return CommonResult.failed("token已经过期！");
         }
         Map<String, String> tokenMap = new HashMap<>();
         tokenMap.put("token", refreshToken);
         tokenMap.put("tokenHead", tokenHead);
+        umsAdminCacheService.setToken(userDetails.getUsername(), tokenHead + refreshToken);
         return CommonResult.success(tokenMap);
     }
 
@@ -85,16 +96,20 @@ public class UmsAdminController {
     @RequestMapping(value = "/info", method = RequestMethod.GET)
     @ResponseBody
     public CommonResult getAdminInfo(Principal principal) {
-        if(principal==null){
+        if (principal == null) {
             return CommonResult.unauthorized(null);
         }
         String username = principal.getName();
         UmsAdmin umsAdmin = adminService.getAdminByUsername(username);
         Map<String, Object> data = new HashMap<>();
         data.put("username", umsAdmin.getUsername());
-        data.put("roles", new String[]{"TEST"});
         data.put("menus", roleService.getMenuList(umsAdmin.getId()));
         data.put("icon", umsAdmin.getIcon());
+        List<UmsRole> roleList = adminService.getRoleList(umsAdmin.getId());
+        if (CollUtil.isNotEmpty(roleList)) {
+            List<String> roles = roleList.stream().map(UmsRole::getName).collect(Collectors.toList());
+            data.put("roles", roles);
+        }
         return CommonResult.success(data);
     }
 
@@ -169,7 +184,7 @@ public class UmsAdminController {
     public CommonResult updateStatus(@PathVariable Long id, @RequestParam(value = "status") Integer status) {
         UmsAdmin umsAdmin = new UmsAdmin();
         umsAdmin.setStatus(status);
-        int count = adminService.update(id,umsAdmin);
+        int count = adminService.update(id, umsAdmin);
         if (count > 0) {
             return CommonResult.success(count);
         }
